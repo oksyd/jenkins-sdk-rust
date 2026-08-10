@@ -56,7 +56,7 @@ async-trait = { version = "0.1.89", default-features = false, optional = true }
 tokio = { version = "1.49.0", default-features = false, features = ["sync", "time"], optional = true }
 
 # HTTP stack
-reqx = { version = "0.1.22", default-features = false, optional = true }
+reqx = { version = "0.2.0", default-features = false, optional = true }
 
 [dev-dependencies]
 anyhow = { version = "1.0.100", default-features = false, features = ["std"] }
