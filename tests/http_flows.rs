@@ -89,9 +89,7 @@ mod fixture {
 
     #[cfg(feature = "async")]
     pub(crate) fn build_async_client(base_url: impl Into<String>) -> Result<Client> {
-        Ok(Client::builder(base_url.into())?
-            .no_system_proxy()
-            .build()?)
+        Ok(Client::builder(base_url.into())?.build()?)
     }
 
     #[cfg(feature = "async")]
@@ -100,17 +98,14 @@ mod fixture {
         crumb_ttl: Duration,
     ) -> Result<Client> {
         Ok(Client::builder(base_url.into())?
-            .no_system_proxy()
-            .auth_basic(TEST_USER, TEST_TOKEN)
-            .with_crumb(crumb_ttl)
+            .auth(jenkins_sdk::Auth::basic(TEST_USER, TEST_TOKEN))
+            .crumb_ttl(crumb_ttl)
             .build()?)
     }
 
     #[cfg(feature = "blocking")]
     pub(crate) fn build_blocking_client(base_url: impl Into<String>) -> Result<BlockingClient> {
-        Ok(BlockingClient::builder(base_url.into())?
-            .no_system_proxy()
-            .build()?)
+        Ok(BlockingClient::builder(base_url.into())?.build()?)
     }
 
     #[cfg(feature = "blocking")]
@@ -119,9 +114,8 @@ mod fixture {
         crumb_ttl: Duration,
     ) -> Result<BlockingClient> {
         Ok(BlockingClient::builder(base_url.into())?
-            .no_system_proxy()
-            .auth_basic(TEST_USER, TEST_TOKEN)
-            .with_crumb(crumb_ttl)
+            .auth(jenkins_sdk::Auth::basic(TEST_USER, TEST_TOKEN))
+            .crumb_ttl(crumb_ttl)
             .build()?)
     }
 
@@ -131,7 +125,7 @@ mod fixture {
         T: Send + 'static,
         F: FnOnce() -> Result<T> + Send + 'static,
     {
-        Ok(tokio::task::spawn_blocking(f).await??)
+        tokio::task::spawn_blocking(f).await?
     }
 }
 
@@ -150,7 +144,7 @@ mod async_computers {
         let server = MockServer::start().await;
 
         Mock::given(method("POST"))
-            .and(path("/computer/doCreateItem"))
+            .and(path("/computer/createItem"))
             .and(query_param("name", "agent-1"))
             .and(header("Content-Type", "application/xml"))
             .and(body_string_contains("<slave/>"))
@@ -162,8 +156,9 @@ mod async_computers {
 
         let client = build_async_client(server.uri())?;
         client
-            .computers()
-            .create_from_xml("agent-1", "<slave/>")
+            .execute(jenkins_sdk::api::computers::create_from_xml(
+                "agent-1", "<slave/>",
+            )?)
             .await?;
 
         server.verify().await;
@@ -177,7 +172,7 @@ mod async_core {
 
     use anyhow::Result;
     use http::StatusCode;
-    use jenkins_sdk::{Client, Error, RetryConfig};
+    use jenkins_sdk::{Client, Error};
     use serde_json::json;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
@@ -223,22 +218,20 @@ mod async_core {
         let client = build_async_authed_client(server.uri(), Duration::ZERO)?;
 
         let first = client
-            .jobs()
-            .build_with_parameters("demo", [("foo", "bar")])
+            .execute(jenkins_sdk::api::jobs::build_with_parameters(
+                "demo",
+                [("foo", "bar")],
+            )?)
             .await?;
-        assert_eq!(
-            first.queue_item_id.as_ref().map(|id| id.as_str()),
-            Some("1")
-        );
+        assert_eq!(first.queue_item_id, 1);
 
         let second = client
-            .jobs()
-            .build_with_parameters("demo", [("foo", "baz")])
+            .execute(jenkins_sdk::api::jobs::build_with_parameters(
+                "demo",
+                [("foo", "baz")],
+            )?)
             .await?;
-        assert_eq!(
-            second.queue_item_id.as_ref().map(|id| id.as_str()),
-            Some("2")
-        );
+        assert_eq!(second.queue_item_id, 2);
 
         server.verify().await;
         Ok(())
@@ -261,13 +254,12 @@ mod async_core {
         let client = build_async_client(server.uri())?;
 
         let err = client
-            .queue()
-            .list(None)
+            .execute(jenkins_sdk::api::queue::list())
             .await
             .expect_err("expected HTTP error");
 
         match err {
-            Error::NotFound(http) => {
+            Error::Http(http) => {
                 assert_eq!(http.status, StatusCode::NOT_FOUND);
                 assert!(
                     http.body_snippet
@@ -302,8 +294,10 @@ mod async_core {
         let client = build_async_authed_client(server.uri(), Duration::from_secs(300))?;
 
         client
-            .jobs()
-            .build_with_parameters("demo", [("foo", "bar")])
+            .execute(jenkins_sdk::api::jobs::build_with_parameters(
+                "demo",
+                [("foo", "bar")],
+            )?)
             .await?;
 
         server.verify().await;
@@ -339,13 +333,12 @@ mod async_core {
         let client = build_async_authed_client(base_url, Duration::from_secs(300))?;
 
         let triggered = client
-            .jobs()
-            .build_with_parameters("demo", [("foo", "bar")])
+            .execute(jenkins_sdk::api::jobs::build_with_parameters(
+                "demo",
+                [("foo", "bar")],
+            )?)
             .await?;
-        assert_eq!(
-            triggered.queue_item_id.as_ref().map(|id| id.as_str()),
-            Some("3")
-        );
+        assert_eq!(triggered.queue_item_id, 3);
 
         server.verify().await;
         Ok(())
@@ -365,11 +358,16 @@ mod async_core {
         .await;
 
         let client = Client::builder(server.uri())?
-            .no_system_proxy()
-            .with_retry(3, Duration::from_millis(5))
+            .configure_http(|http| {
+                http.retry_policy(
+                    jenkins_sdk::reqx::prelude::RetryPolicy::standard()
+                        .max_attempts(4)
+                        .base_backoff(Duration::from_millis(5)),
+                )
+            })
             .build()?;
 
-        let response = client.queue().list(None).await?;
+        let response = client.execute(jenkins_sdk::api::queue::list()).await?;
         assert!(response.items.is_empty());
 
         server.verify().await;
@@ -397,18 +395,18 @@ mod async_core {
         .await;
 
         let client = Client::builder(server.uri())?
-            .no_system_proxy()
-            .retry_config(RetryConfig {
-                max_retries: 1,
-                base_delay: Duration::ZERO,
-                max_delay: Duration::ZERO,
-                jitter: false,
-                retry_non_idempotent: false,
-                respect_retry_after: true,
+            .configure_http(|http| {
+                http.retry_policy(
+                    jenkins_sdk::reqx::prelude::RetryPolicy::standard()
+                        .max_attempts(2)
+                        .base_backoff(Duration::from_millis(1))
+                        .max_backoff(Duration::from_millis(1))
+                        .jitter_ratio(0.0),
+                )
             })
             .build()?;
 
-        let response = client.queue().list(None).await?;
+        let response = client.execute(jenkins_sdk::api::queue::list()).await?;
         assert!(response.items.is_empty());
 
         server.verify().await;
@@ -428,18 +426,16 @@ mod async_core {
         .await;
 
         let client = Client::builder(server.uri())?
-            .no_system_proxy()
-            .auth_basic(TEST_USER, "supersecret")
+            .auth(jenkins_sdk::Auth::basic(TEST_USER, "supersecret"))
             .build()?;
 
         let err = client
-            .queue()
-            .list(None)
+            .execute(jenkins_sdk::api::queue::list())
             .await
             .expect_err("expected HTTP error");
 
         match err {
-            Error::Api(http) => {
+            Error::Http(http) => {
                 let snippet = http.body_snippet.as_deref().unwrap_or_default();
                 assert!(!snippet.contains("supersecret"));
                 assert!(snippet.contains("<redacted>"));
@@ -480,7 +476,7 @@ mod async_jobs {
 
         let client = build_async_client(server.uri())?;
 
-        let jobs = client.jobs().list().await?;
+        let jobs = client.execute(jenkins_sdk::api::jobs::list()).await?;
         assert!(jobs.jobs.is_empty());
 
         server.verify().await;
@@ -508,11 +504,14 @@ mod async_jobs {
         let client = build_async_client(server.uri())?;
 
         let chunk = client
-            .jobs()
-            .progressive_console_text("demo", "1", 0)
+            .execute(jenkins_sdk::api::builds::progressive_console_text(
+                "demo",
+                jenkins_sdk::api::builds::BuildSelector::Number(1),
+                0,
+            )?)
             .await?;
         assert_eq!(chunk.text, "hello");
-        assert_eq!(chunk.next_start, Some(5));
+        assert_eq!(chunk.next_start, 5);
         assert!(chunk.more_data);
 
         server.verify().await;
@@ -534,8 +533,11 @@ mod async_jobs {
         let client = build_async_client(server.uri())?;
 
         let bytes = client
-            .jobs()
-            .download_artifact("demo", "1", "a/b c.txt")
+            .execute(jenkins_sdk::api::builds::download_artifact(
+                "demo",
+                jenkins_sdk::api::builds::BuildSelector::Number(1),
+                "a/b c.txt",
+            )?)
             .await?;
         assert_eq!(bytes, vec![1, 2, 3]);
 
@@ -572,52 +574,16 @@ mod async_system {
 
         let client = build_async_client(server.uri())?;
 
-        assert_eq!(client.system().agent_jar().await?, vec![1]);
-        assert_eq!(client.system().cli_jar().await?, vec![2]);
-
-        server.verify().await;
-        Ok(())
-    }
-}
-
-#[cfg(feature = "async")]
-mod async_users {
-    use anyhow::Result;
-    use wiremock::{
-        Mock, MockServer, ResponseTemplate,
-        matchers::{body_string_contains, header, method, path},
-    };
-
-    use crate::fixture::{build_async_client, mock_get};
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn async_users_config_xml_supports_get_and_update() -> Result<()> {
-        let server = MockServer::start().await;
-
-        mock_get(
-            &server,
-            "/user/alice/config.xml",
-            ResponseTemplate::new(200).set_body_string("<u/>"),
-            1,
-        )
-        .await;
-
-        Mock::given(method("POST"))
-            .and(path("/user/alice/config.xml"))
-            .and(header("Content-Type", "application/xml"))
-            .and(body_string_contains("<u/>"))
-            .respond_with(ResponseTemplate::new(200))
-            .expect(1)
-            .up_to_n_times(1)
-            .mount(&server)
-            .await;
-
-        let client = build_async_client(server.uri())?;
-
-        let xml = client.users().get_config_xml("alice").await?;
-        assert_eq!(String::from_utf8_lossy(&xml), "<u/>");
-
-        client.users().update_config_xml("alice", xml).await?;
+        assert_eq!(
+            client
+                .execute(jenkins_sdk::api::system::agent_jar())
+                .await?,
+            vec![1]
+        );
+        assert_eq!(
+            client.execute(jenkins_sdk::api::system::cli_jar()).await?,
+            vec![2]
+        );
 
         server.verify().await;
         Ok(())
@@ -629,7 +595,7 @@ mod blocking_core {
     use std::time::Duration;
 
     use anyhow::Result;
-    use jenkins_sdk::{BlockingClient, RetryConfig};
+    use jenkins_sdk::BlockingClient;
     use serde_json::json;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
@@ -670,20 +636,29 @@ mod blocking_core {
         let base_url = server.uri();
         run_blocking(move || -> Result<()> {
             let client = BlockingClient::builder(base_url)?
-                .no_system_proxy()
-                .auth_basic(TEST_USER, TEST_TOKEN)
-                .retry_config(RetryConfig {
-                    max_retries: 3,
-                    base_delay: Duration::from_millis(5),
-                    max_delay: Duration::from_millis(5),
-                    jitter: false,
-                    retry_non_idempotent: true,
-                    respect_retry_after: true,
+                .auth(jenkins_sdk::Auth::basic(TEST_USER, TEST_TOKEN))
+                .configure_http(|http| {
+                    http.retry_policy(
+                        jenkins_sdk::reqx::prelude::RetryPolicy::standard()
+                            .max_attempts(4)
+                            .base_backoff(Duration::from_millis(5))
+                            .max_backoff(Duration::from_millis(5))
+                            .jitter_ratio(0.0),
+                    )
                 })
-                .with_crumb(Duration::from_secs(300))
+                .configure_http(|http| {
+                    http.allow_non_idempotent_retries(true)
+                        .retry_eligibility(std::sync::Arc::new(
+                            jenkins_sdk::reqx::advanced::PermissiveRetryEligibility,
+                        ))
+                })
+                .crumb_ttl(Duration::from_secs(300))
                 .build()?;
 
-            client.jobs().stop_build("demo", "1")?;
+            client.execute(jenkins_sdk::api::builds::stop(
+                "demo",
+                jenkins_sdk::api::builds::BuildSelector::Number(1),
+            )?)?;
             Ok(())
         })
         .await?;
@@ -720,7 +695,10 @@ mod blocking_core {
         let base_url = format!("{}/jenkins", server.uri());
         run_blocking(move || -> Result<()> {
             let client = build_blocking_authed_client(base_url, Duration::from_secs(300))?;
-            client.jobs().stop_build("demo", "1")?;
+            client.execute(jenkins_sdk::api::builds::stop(
+                "demo",
+                jenkins_sdk::api::builds::BuildSelector::Number(1),
+            )?)?;
             Ok(())
         })
         .await?;
@@ -762,9 +740,13 @@ mod blocking_jobs {
         run_blocking(move || -> Result<()> {
             let client = build_blocking_client(base_url)?;
 
-            let chunk = client.jobs().progressive_console_text("demo", "1", 0)?;
+            let chunk = client.execute(jenkins_sdk::api::builds::progressive_console_text(
+                "demo",
+                jenkins_sdk::api::builds::BuildSelector::Number(1),
+                0,
+            )?)?;
             assert_eq!(chunk.text, "hello");
-            assert_eq!(chunk.next_start, Some(5));
+            assert_eq!(chunk.next_start, 5);
             assert!(chunk.more_data);
 
             Ok(())
@@ -791,7 +773,11 @@ mod blocking_jobs {
         run_blocking(move || -> Result<()> {
             let client = build_blocking_client(base_url)?;
 
-            let bytes = client.jobs().download_artifact("demo", "1", "a/b c.txt")?;
+            let bytes = client.execute(jenkins_sdk::api::builds::download_artifact(
+                "demo",
+                jenkins_sdk::api::builds::BuildSelector::Number(1),
+                "a/b c.txt",
+            )?)?;
             assert_eq!(bytes, vec![1, 2, 3]);
 
             Ok(())

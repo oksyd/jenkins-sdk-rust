@@ -1,202 +1,112 @@
 use http::{Method, StatusCode};
-use std::{error::Error as StdError, fmt, time::Duration};
+use std::{fmt, time::Duration};
 use thiserror::Error;
 use url::Url;
 
+/// Result of request construction, client configuration, or Jenkins execution.
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug, Clone, Copy)]
-pub struct BodySnippetConfig {
-    pub enabled: bool,
-    pub max_bytes: usize,
-}
-
-impl Default for BodySnippetConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            max_bytes: 4096,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ErrorKind {
-    Auth,
-    NotFound,
-    Conflict,
-    RateLimited,
-    Api,
-    Transport,
-    Decode,
-    InvalidConfig,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum TransportErrorKind {
-    Timeout,
-    Connect,
-    Other,
-}
-
-#[derive(Debug, Clone)]
+/// Context shared by HTTP failures and invalid Jenkins responses.
+#[derive(Debug)]
 pub struct HttpError {
     pub status: StatusCode,
     pub method: Method,
-    /// Sanitized URL: no query/fragment/userinfo.
-    pub url: Box<Url>,
-    pub message: Option<Box<str>>,
-    pub request_id: Option<Box<str>>,
-    pub body_snippet: Option<Box<str>>,
-}
-
-impl HttpError {
-    #[must_use]
-    pub fn path(&self) -> &str {
-        self.url.path()
-    }
-}
-
-/// All errors returned by the SDK.
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum Error {
-    #[error("{0}")]
-    Auth(HttpError),
-
-    #[error("{0}")]
-    NotFound(HttpError),
-
-    #[error("{0}")]
-    Conflict(HttpError),
-
-    #[error("{error}")]
-    RateLimited {
-        error: HttpError,
-        retry_after: Option<Duration>,
-    },
-
-    #[error("{0}")]
-    Api(HttpError),
-
-    #[error("Transport error during {method} {path}: {source}")]
-    Transport {
-        method: Method,
-        path: Box<str>,
-        kind: TransportErrorKind,
-        #[source]
-        source: Box<dyn StdError + Send + Sync>,
-    },
-
-    #[error("Decode error (HTTP {status}) during {method} {path}: {source}")]
-    Decode {
-        status: StatusCode,
-        method: Method,
-        path: Box<str>,
-        request_id: Option<Box<str>>,
-        body_snippet: Option<Box<str>>,
-        #[source]
-        source: Box<dyn StdError + Send + Sync>,
-    },
-
-    #[error("Invalid configuration: {message}")]
-    InvalidConfig {
-        message: Box<str>,
-        #[source]
-        source: Option<Box<dyn StdError + Send + Sync>>,
-    },
-}
-
-impl Error {
-    #[must_use]
-    pub fn kind(&self) -> ErrorKind {
-        match self {
-            Self::Auth(_) => ErrorKind::Auth,
-            Self::NotFound(_) => ErrorKind::NotFound,
-            Self::Conflict(_) => ErrorKind::Conflict,
-            Self::RateLimited { .. } => ErrorKind::RateLimited,
-            Self::Api(_) => ErrorKind::Api,
-            Self::Transport { .. } => ErrorKind::Transport,
-            Self::Decode { .. } => ErrorKind::Decode,
-            Self::InvalidConfig { .. } => ErrorKind::InvalidConfig,
-        }
-    }
-
-    #[must_use]
-    pub fn status(&self) -> Option<StatusCode> {
-        match self {
-            Self::Auth(e) | Self::NotFound(e) | Self::Conflict(e) | Self::Api(e) => Some(e.status),
-            Self::RateLimited { error, .. } => Some(error.status),
-            Self::Decode { status, .. } => Some(*status),
-            Self::Transport { .. } | Self::InvalidConfig { .. } => None,
-        }
-    }
-
-    #[must_use]
-    pub fn request_id(&self) -> Option<&str> {
-        match self {
-            Self::Auth(e) | Self::NotFound(e) | Self::Conflict(e) | Self::Api(e) => {
-                e.request_id.as_deref()
-            }
-            Self::RateLimited { error, .. } => error.request_id.as_deref(),
-            Self::Decode { request_id, .. } => request_id.as_deref(),
-            Self::Transport { .. } | Self::InvalidConfig { .. } => None,
-        }
-    }
-
-    #[must_use]
-    pub fn retry_after(&self) -> Option<Duration> {
-        match self {
-            Self::RateLimited { retry_after, .. } => *retry_after,
-            _ => None,
-        }
-    }
-
-    #[must_use]
-    pub fn is_auth_error(&self) -> bool {
-        matches!(self, Self::Auth(_))
-    }
-
-    #[must_use]
-    pub fn is_retryable(&self) -> bool {
-        match self {
-            Self::RateLimited { .. } => true,
-            Self::Api(e) => matches!(
-                e.status,
-                StatusCode::BAD_GATEWAY
-                    | StatusCode::SERVICE_UNAVAILABLE
-                    | StatusCode::GATEWAY_TIMEOUT
-            ),
-            Self::Transport { kind, .. } => matches!(
-                kind,
-                TransportErrorKind::Timeout | TransportErrorKind::Connect
-            ),
-            _ => false,
-        }
-    }
-
-    pub(crate) fn from_http(error: HttpError, retry_after: Option<Duration>) -> Self {
-        match error.status {
-            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Self::Auth(error),
-            StatusCode::NOT_FOUND => Self::NotFound(error),
-            StatusCode::CONFLICT | StatusCode::PRECONDITION_FAILED => Self::Conflict(error),
-            StatusCode::TOO_MANY_REQUESTS => Self::RateLimited { error, retry_after },
-            _ => Self::Api(error),
-        }
-    }
+    /// Request URL without query parameters or credentials.
+    pub url: Url,
+    pub request_id: Option<String>,
+    pub retry_after: Option<Duration>,
+    /// Bounded response text with the configured authentication secret redacted.
+    /// Defaults to at most 4096 bytes; configure with
+    /// [`Builder::error_body_limit`](crate::Builder::error_body_limit).
+    pub body_snippet: Option<String>,
 }
 
 impl fmt::Display for HttpError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "HTTP {} ({} {})", self.status, self.method, self.path())?;
-        if let Some(message) = self.message.as_deref() {
-            write!(f, ": {message}")?;
+        write!(
+            f,
+            "HTTP {} during {} {}",
+            self.status,
+            self.method,
+            self.url.path()
+        )
+    }
+}
+
+impl std::error::Error for HttpError {}
+
+/// Why a successful HTTP response could not be interpreted.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum DecodeError {
+    #[error("Jenkins rejected the action: {0}")]
+    Rejected(String),
+    #[error("invalid JSON: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("invalid UTF-8: {0}")]
+    Utf8(#[from] std::str::Utf8Error),
+    #[error("missing required response header {0}")]
+    MissingHeader(&'static str),
+    #[error("invalid response header {0}")]
+    InvalidHeader(&'static str),
+    #[error("{0}")]
+    InvalidResponse(&'static str),
+}
+
+/// SDK errors keep HTTP status, response decoding, and transport failures distinct.
+/// Retry eligibility and transport error classification belong to reqx.
+///
+/// - [`Self::Transport`] retains the native reqx error, including timeout phases
+///   and response-size failures.
+/// - [`Self::Http`] reports a status rejected by the request's status policy.
+/// - [`Self::Decode`] reports malformed JSON, invalid UTF-8, missing metadata, or
+///   a rejected Jenkins management action, even when its HTTP status is 200.
+/// - [`Self::Serialize`] reports request-serialization failures.
+///
+/// [`Self::response`] returns status, method, URL without query parameters,
+/// request ID, Retry-After, and an optional body snippet when available.
+/// [`Builder::error_body_limit`](crate::Builder::error_body_limit) controls only
+/// captured snippets; transport and parser errors retain their original sources.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum Error {
+    #[error("could not serialize request: {0}")]
+    Serialize(#[source] serde_json::Error),
+    #[error(transparent)]
+    Transport(#[from] Box<reqx::Error>),
+    #[error(transparent)]
+    Http(#[from] Box<HttpError>),
+    #[error("{response}: {source}")]
+    Decode {
+        response: Box<HttpError>,
+        #[source]
+        source: DecodeError,
+    },
+    #[error("invalid {field}: {message}")]
+    InvalidInput {
+        field: &'static str,
+        message: &'static str,
+    },
+    #[error("invalid base URL: {0}")]
+    InvalidUrl(#[from] url::ParseError),
+    #[error("invalid authorization header: {0}")]
+    InvalidAuth(#[from] http::header::InvalidHeaderValue),
+    #[error("crumb cache lock was poisoned by a panic")]
+    CrumbCachePoisoned,
+}
+
+impl From<reqx::Error> for Error {
+    fn from(error: reqx::Error) -> Self {
+        Self::Transport(Box::new(error))
+    }
+}
+
+impl Error {
+    /// The response context, when an HTTP response was received.
+    pub fn response(&self) -> Option<&HttpError> {
+        match self {
+            Self::Http(response) | Self::Decode { response, .. } => Some(response),
+            _ => None,
         }
-        if let Some(request_id) = self.request_id.as_deref() {
-            write!(f, " [request-id: {request_id}]")?;
-        }
-        Ok(())
     }
 }

@@ -7,7 +7,6 @@ on:
       - 'Dockerfile'
       - 'CHANGELOG.md'
       - 'README.md'
-      - 'README.zh-CN.md'
   pull_request:
     branches: [ main ]
 
@@ -19,6 +18,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  jenkins-lts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.148
+      - uses: Swatinem/rust-cache@v2
+      - name: Test against Jenkins 2.580.1 LTS
+        run: tests/jenkins-lts.sh
+
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -29,7 +43,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.93.1
+          toolchain: 1.99.1
           components: rustfmt, clippy
 
       - name: Cache cargo
@@ -39,10 +53,12 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --features tracing,metrics -- -D warnings
+        run: cargo clippy --workspace --all-targets --features blocking-rustls-ring,compression-gzip -- -D warnings
 
       - name: Doc
-        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --features blocking-rustls-ring
 
   test:
     runs-on: ubuntu-latest
@@ -61,6 +77,8 @@ jobs:
             args: --no-default-features --features blocking-rustls-ring
           - name: blocking-rustls-aws-lc-rs
             args: --no-default-features --features blocking-rustls-aws-lc-rs
+          - name: async-and-blocking
+            args: --features blocking-rustls-ring,compression-gzip,compression-brotli,compression-zstd
           - name: blocking-native-tls
             args: --no-default-features --features blocking-native-tls
 
@@ -70,11 +88,16 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.93.1
+          toolchain: 1.99.1
           components: rustfmt, clippy
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.148
 
       - name: Install OpenSSL (native-tls)
         if: contains(matrix.name, 'native-tls')
@@ -89,4 +112,7 @@ jobs:
           fi
 
       - name: Test (${{ matrix.name }})
-        run: cargo test --workspace ${{ matrix.args }}
+        run: cargo nextest run --workspace ${{ matrix.args }}
+
+      - name: Doctests (${{ matrix.name }})
+        run: cargo test --workspace --doc ${{ matrix.args }}

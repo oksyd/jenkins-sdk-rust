@@ -1,118 +1,96 @@
-use crate::transport::request::{Request, RequestBody};
-use crate::{Error, UserId, UserInfo, WhoAmI};
-use http::HeaderValue;
+//! Jenkins users: request constructors and response types.
 
-/// Jenkins users (core) APIs.
-#[derive(Clone)]
-#[cfg(feature = "async")]
-pub struct UsersService {
-    client: crate::Client,
+use super::path;
+use crate::{Request, Result, response};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::BTreeMap;
+
+/// User payload from `GET /user/<id>/api/json`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct UserInfo {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub full_name: Option<String>,
+    pub description: Option<String>,
+    pub absolute_url: Option<String>,
+    pub url: Option<String>,
+    pub authorities: Option<Vec<String>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
-#[cfg(feature = "async")]
-impl UsersService {
-    pub(crate) fn new(client: crate::Client) -> Self {
-        Self { client }
-    }
+/// `GET /user/<id>/api/json`
+pub fn get(id: &str) -> Result<Request<UserInfo>> {
+    path::validate_segment(id)?;
+
+    Ok(Request::get(["user", id, "api", "json"], response::json))
 }
 
-#[cfg(feature = "async")]
-impl UsersService {
-    /// `GET /user/<id>/api/json`
-    pub async fn get(&self, id: impl Into<UserId>, tree: Option<&str>) -> Result<UserInfo, Error> {
-        let id = id.into();
-        let mut req = Request::get(["user", id.as_str(), "api", "json"]);
-        if let Some(tree) = tree {
-            req = req.query_pair("tree", tree);
-        }
-        self.client.send_json(req).await
-    }
-
-    /// `GET /whoAmI/api/json`
-    pub async fn who_am_i(&self) -> Result<WhoAmI, Error> {
-        self.client
-            .send_json(Request::get(["whoAmI", "api", "json"]))
-            .await
-    }
-
-    /// `GET /user/<id>/config.xml`
-    pub async fn get_config_xml(&self, id: impl Into<UserId>) -> Result<Vec<u8>, Error> {
-        let id = id.into();
-        self.client
-            .send_bytes(Request::get(["user", id.as_str(), "config.xml"]))
-            .await
-    }
-
-    /// `POST /user/<id>/config.xml` with XML body.
-    pub async fn update_config_xml(
-        &self,
-        id: impl Into<UserId>,
-        xml: impl Into<Vec<u8>>,
-    ) -> Result<(), Error> {
-        let id = id.into();
-        self.client
-            .send_unit(Request::post(["user", id.as_str(), "config.xml"]).body(
-                RequestBody::bytes_with_content_type(
-                    xml.into(),
-                    HeaderValue::from_static("application/xml"),
-                ),
-            ))
-            .await
-    }
+pub fn set_description(id: &str, description: impl Into<String>) -> Result<Request<()>> {
+    path::validate_segment(id)?;
+    Ok(
+        Request::post(["user", id, "submitDescription"], response::empty)
+            .form_pairs([("description", description)]),
+    )
 }
 
-/// Jenkins users (core) APIs (blocking).
-#[cfg(feature = "blocking")]
-#[derive(Clone)]
-pub struct BlockingUsersService {
-    client: crate::BlockingClient,
+/// Delete a user. Jenkins rejects deletion of the currently authenticated user.
+pub fn delete(id: &str) -> Result<Request<()>> {
+    path::validate_segment(id)?;
+    Ok(Request::post(["user", id, "doDelete"], response::empty))
 }
 
-#[cfg(feature = "blocking")]
-impl BlockingUsersService {
-    pub(crate) fn new(client: crate::BlockingClient) -> Self {
-        Self { client }
-    }
+/// Configure a user's account, including `fullName` and `description`.
+pub fn configure(id: &str, form: &Value) -> Result<Request<()>> {
+    path::validate_segment(id)?;
+    Request::post(["user", id, "account", "configSubmit"], response::empty).submitted_form(form)
 }
 
-#[cfg(feature = "blocking")]
-impl BlockingUsersService {
-    /// `GET /user/<id>/api/json`
-    pub fn get(&self, id: impl Into<UserId>, tree: Option<&str>) -> Result<UserInfo, Error> {
-        let id = id.into();
-        let mut req = Request::get(["user", id.as_str(), "api", "json"]);
-        if let Some(tree) = tree {
-            req = req.query_pair("tree", tree);
-        }
-        self.client.send_json(req)
-    }
+/// Configure another core user property category (for example `appearance`
+/// or `security`) with that category's full structured form.
+pub fn configure_category(id: &str, category: &str, form: &Value) -> Result<Request<()>> {
+    path::validate_segment(id)?;
+    path::validate_segment(category)?;
+    Request::post(["user", id, category, "configSubmit"], response::empty).submitted_form(form)
+}
 
-    /// `GET /whoAmI/api/json`
-    pub fn who_am_i(&self) -> Result<WhoAmI, Error> {
-        self.client
-            .send_json(Request::get(["whoAmI", "api", "json"]))
-    }
+/// Create an account in Jenkins' built-in user database as an administrator.
+/// Other security realms do not expose this action.
+pub fn create_local(id: &str, password: &str, full_name: &str) -> Result<Request<()>> {
+    path::validate_segment(id)?;
+    Ok(
+        Request::post(["securityRealm", "createAccountByAdmin"], |response, _| {
+            if response.status() == http::StatusCode::FOUND {
+                Ok(())
+            } else {
+                Err(crate::DecodeError::InvalidResponse(
+                    "Jenkins returned an account validation form",
+                ))
+            }
+        })
+        .form_pairs([
+            ("username", id),
+            ("password1", password),
+            ("password2", password),
+            ("fullname", full_name),
+        ]),
+    )
+}
 
-    /// `GET /user/<id>/config.xml`
-    pub fn get_config_xml(&self, id: impl Into<UserId>) -> Result<Vec<u8>, Error> {
-        let id = id.into();
-        self.client
-            .send_bytes(Request::get(["user", id.as_str(), "config.xml"]))
-    }
-
-    /// `POST /user/<id>/config.xml` with XML body.
-    pub fn update_config_xml(
-        &self,
-        id: impl Into<UserId>,
-        xml: impl Into<Vec<u8>>,
-    ) -> Result<(), Error> {
-        let id = id.into();
-        self.client
-            .send_unit(Request::post(["user", id.as_str(), "config.xml"]).body(
-                RequestBody::bytes_with_content_type(
-                    xml.into(),
-                    HeaderValue::from_static("application/xml"),
-                ),
-            ))
-    }
+/// Invalidate this user's existing browser sessions.
+pub fn renew_session_seed(id: &str) -> Result<Request<()>> {
+    path::validate_segment(id)?;
+    Ok(Request::post(
+        [
+            "user",
+            id,
+            "descriptorByName",
+            "jenkins.security.seed.UserSeedProperty",
+            "renewSessionSeed",
+        ],
+        response::empty,
+    ))
 }

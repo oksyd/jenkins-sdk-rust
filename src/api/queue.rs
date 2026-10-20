@@ -1,92 +1,76 @@
-use crate::transport::request::Request;
-use crate::{Error, QueueItem, QueueItemId, QueueList};
+//! Jenkins queue: request constructors and response types.
 
-/// Jenkins queue (core) APIs.
-#[derive(Clone)]
-#[cfg(feature = "async")]
-pub struct QueueService {
-    client: crate::Client,
+use crate::{Request, response};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::BTreeMap;
+
+/// Queue list payload (`GET /queue/api/json`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct QueueList {
+    pub items: Vec<QueueItem>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
-#[cfg(feature = "async")]
-impl QueueService {
-    pub(crate) fn new(client: crate::Client) -> Self {
-        Self { client }
-    }
+/// Queue item payload (`GET /queue/item/<id>/api/json`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct QueueItem {
+    pub id: Option<u64>,
+    pub blocked: Option<bool>,
+    pub buildable: Option<bool>,
+    pub stuck: Option<bool>,
+    pub cancelled: Option<bool>,
+    pub why: Option<String>,
+    pub params: Option<String>,
+    pub in_queue_since: Option<u64>,
+    pub task: Option<QueueTask>,
+    pub executable: Option<QueueExecutable>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
-#[cfg(feature = "async")]
-impl QueueService {
-    /// `GET /queue/api/json`
-    pub async fn list(&self, tree: Option<&str>) -> Result<QueueList, Error> {
-        let mut req = Request::get(["queue", "api", "json"]);
-        if let Some(tree) = tree {
-            req = req.query_pair("tree", tree);
-        }
-        self.client.send_json(req).await
-    }
-
-    /// `GET /queue/item/<id>/api/json`
-    pub async fn item(
-        &self,
-        id: impl Into<QueueItemId>,
-        tree: Option<&str>,
-    ) -> Result<QueueItem, Error> {
-        let id = id.into();
-        let mut req = Request::get(["queue", "item", id.as_str(), "api", "json"]);
-        if let Some(tree) = tree {
-            req = req.query_pair("tree", tree);
-        }
-        self.client.send_json(req).await
-    }
-
-    /// `POST /queue/cancelItem?id=<id>`
-    pub async fn cancel(&self, id: impl Into<QueueItemId>) -> Result<(), Error> {
-        let id = id.into();
-        let req = Request::post(["queue", "cancelItem"]).query_pair("id", id.as_str());
-        self.client.send_unit(req).await
-    }
+/// Minimal task shape nested in queue items.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct QueueTask {
+    pub name: Option<String>,
+    pub url: Option<String>,
+    #[serde(rename = "_class")]
+    pub class_name: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
-/// Jenkins queue (core) APIs (blocking).
-#[cfg(feature = "blocking")]
-#[derive(Clone)]
-pub struct BlockingQueueService {
-    client: crate::BlockingClient,
+/// Build pointer nested in queue items when executable already started.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct QueueExecutable {
+    pub number: Option<u64>,
+    pub url: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
-#[cfg(feature = "blocking")]
-impl BlockingQueueService {
-    pub(crate) fn new(client: crate::BlockingClient) -> Self {
-        Self { client }
-    }
+/// `GET /queue/api/json`
+pub fn list() -> Request<QueueList> {
+    Request::get(["queue", "api", "json"], response::json)
 }
 
-#[cfg(feature = "blocking")]
-impl BlockingQueueService {
-    /// `GET /queue/api/json`
-    pub fn list(&self, tree: Option<&str>) -> Result<QueueList, Error> {
-        let mut req = Request::get(["queue", "api", "json"]);
-        if let Some(tree) = tree {
-            req = req.query_pair("tree", tree);
-        }
-        self.client.send_json(req)
-    }
+/// `GET /queue/item/<id>/api/json`
+pub fn item(id: u64) -> Request<QueueItem> {
+    Request::get(
+        ["queue", "item", &id.to_string(), "api", "json"],
+        response::json,
+    )
+}
 
-    /// `GET /queue/item/<id>/api/json`
-    pub fn item(&self, id: impl Into<QueueItemId>, tree: Option<&str>) -> Result<QueueItem, Error> {
-        let id = id.into();
-        let mut req = Request::get(["queue", "item", id.as_str(), "api", "json"]);
-        if let Some(tree) = tree {
-            req = req.query_pair("tree", tree);
-        }
-        self.client.send_json(req)
-    }
-
-    /// `POST /queue/cancelItem?id=<id>`
-    pub fn cancel(&self, id: impl Into<QueueItemId>) -> Result<(), Error> {
-        let id = id.into();
-        let req = Request::post(["queue", "cancelItem"]).query_pair("id", id.as_str());
-        self.client.send_unit(req)
-    }
+/// `POST /queue/cancelItem?id=<id>`
+pub fn cancel(id: u64) -> Request<()> {
+    Request::post(["queue", "cancelItem"], response::empty).query("id", id.to_string())
 }

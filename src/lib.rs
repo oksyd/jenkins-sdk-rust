@@ -1,42 +1,101 @@
-//! Jenkins API SDK in pure Rust.
+//! Typed Jenkins core requests with async and blocking execution, powered by [`reqx`].
 //!
-//! ## Quick start (async)
+//! Start with a client, construct a [`Request`] using an [`api`] resource module,
+//! then execute it. Request construction validates input without performing I/O.
+//! Response types live alongside their constructors, such as [`api::jobs::JobInfo`].
+//! The core baseline is [`SUPPORTED_JENKINS_LTS`].
+//!
+//! # Quick start
+//!
+//! The default feature, `async-rustls-ring`, provides `Client`. Run async calls
+//! inside a Tokio runtime.
+//!
 //! ```no_run
 //! # #[cfg(feature = "async")]
-//! # async fn demo() -> Result<(), jenkins_sdk::Error> {
-//! use jenkins_sdk::Client;
-//! use std::time::Duration;
+//! # async fn example() -> jenkins_sdk::Result<()> {
+//! use jenkins_sdk::{Auth, Client, api::{jobs, queue}};
 //!
-//! let client = Client::builder("https://jenkins.example.com")?
-//!     .auth_basic("user", "token")
-//!     .with_retry(3, Duration::from_millis(200))
-//!     .with_crumb(Duration::from_secs(1800))
+//! let client = Client::builder("https://jenkins.example.com/jenkins")?
+//!     .auth(Auth::basic("user", "api-token"))
 //!     .build()?;
 //!
-//! let q = client.queue().list(None).await?;
-//! println!("queue items={}", q.items.len());
+//! let queue = client.execute(queue::list().tree("items[id,why]")).await?;
+//! let job = client.execute(jobs::get("folder/job")?).await?;
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! ## Quick start (blocking)
-//! Enable one blocking transport feature (for example `blocking-rustls-ring`):
+//! Enable `blocking-rustls-ring` for `BlockingClient`, which executes the same
+//! requests without a Tokio runtime. Use a dedicated thread or `spawn_blocking`
+//! when calling it from an async application.
+//!
 //! ```no_run
 //! # #[cfg(feature = "blocking")]
-//! # fn demo() -> Result<(), jenkins_sdk::Error> {
-//! use jenkins_sdk::BlockingClient;
-//! use std::time::Duration;
+//! # fn example() -> jenkins_sdk::Result<()> {
+//! use jenkins_sdk::{Auth, BlockingClient, api::jobs};
 //!
-//! let client = BlockingClient::builder("https://jenkins.example.com")?
-//!     .auth_basic("user", "token")
-//!     .with_retry(2, Duration::from_millis(200))
+//! let client = BlockingClient::builder("https://jenkins.example.com/jenkins")?
+//!     .auth(Auth::basic("user", "api-token"))
 //!     .build()?;
-//!
-//! let q = client.queue().list(None)?;
-//! println!("queue items={}", q.items.len());
+//! let job = client.execute(jobs::get("folder/job")?)?;
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Features
+//!
+//! Choose exactly one TLS backend per enabled client mode. Both modes can be
+//! enabled together. Disable default features for blocking-only use or to replace
+//! the default async TLS backend. Blocking-only dependencies do not include Tokio.
+//!
+//! | Async | Blocking |
+//! |---|---|
+//! | `async-rustls-ring` (default) | `blocking-rustls-ring` |
+//! | `async-rustls-aws-lc-rs` | `blocking-rustls-aws-lc-rs` |
+//! | `async-native-tls` | `blocking-native-tls` |
+//!
+//! Compression is opt-in: `compression-gzip`, `compression-brotli`, and
+//! `compression-zstd`. `--all-features` is unsupported because TLS backends are
+//! mutually exclusive.
+//!
+//! # Usage guide
+//!
+//! - [`api`]: core coverage, resource paths, and response projections.
+//! - [`Builder::configure_http`]: native reqx timeouts, retries, TLS, proxies,
+//!   and response limits. Retries are disabled by default.
+//! - [`Builder::crumb_ttl`]: opt-in CSRF crumbs and session caching.
+//! - [`Request`]: query parameters, request bodies, custom endpoints, and decoders.
+//! - [`Multipart`]: buffered file parameters and uploads.
+//! - [`Error`] and [`HttpError`]: transport failures, response context, and diagnostics.
+//!
+//! Complete programs are in the repository's
+//! [examples directory](https://github.com/lvillis/jenkins-sdk-rust/tree/main/examples).
+//!
+//! # Migrating from the service API
+//!
+//! This request-based API replaces the previous service hierarchy without
+//! compatibility aliases:
+//!
+//! - Replace `client.jobs().get(name, tree)` with
+//!   `client.execute(jobs::get(name)?.tree(fields))`, importing [`api::jobs`].
+//! - Build operations, logs, and artifacts now live in [`api::builds`].
+//!   Use [`api::builds::BuildSelector`] for numeric and symbolic build selectors.
+//!   Other names and paths use `&str`; queue IDs use `u64`.
+//! - Import response models from their resource modules instead of `types`,
+//!   `models`, or the crate root. `ComputerSummary` is now
+//!   [`api::computers::ComputerInfo`]; identity is [`api::system::who_am_i`].
+//! - Use [`Builder::auth`] with [`Auth`], [`Builder::crumb_ttl`], and
+//!   [`Builder::configure_http`] / [`Builder::try_configure_http`]. Transport hooks,
+//!   tracing, metrics, TLS, and retry policies use reqx's native APIs.
+//! - Match [`Error`] variants and inspect the native reqx error for transport
+//!   classification. Executor availability uses
+//!   [`api::computers::ExecutorsInfo::idle_executors`], which returns `Option<u32>`.
+//! - Invalid legacy routes were removed: use structured controller/user
+//!   configuration, [`api::views::configure`] for view changes, and
+//!   [`api::computers::launch_slave_agent`] for agent launch. Computer XML creation
+//!   uses `computer/createItem`.
+//! - Plugin APIs, including Pipeline termination and the extracted People API,
+//!   use [`Request::new`] instead of core resource constructors.
 
 // compile-time guard: enable at least one client kind.
 #[cfg(not(any(feature = "async", feature = "blocking")))]
@@ -99,29 +158,22 @@ pub mod api;
 mod auth;
 mod client;
 mod error;
-mod request_hook;
-mod tls;
-pub mod types;
+mod multipart;
+mod request;
+mod response;
 
-mod transport;
-mod util;
-
-#[cfg(feature = "blocking")]
-pub use api::{
-    BlockingComputersService, BlockingJobsService, BlockingPeopleService, BlockingQueueService,
-    BlockingSystemService, BlockingUsersService, BlockingViewsService,
-};
-#[cfg(feature = "async")]
-pub use api::{
-    ComputersService, JobsService, PeopleService, QueueService, SystemService, UsersService,
-    ViewsService,
-};
 pub use auth::Auth;
-pub use error::{BodySnippetConfig, Error, ErrorKind, HttpError, Result, TransportErrorKind};
-pub use request_hook::{RequestHook, RequestHookContext};
-pub use tls::TlsRootStore;
-pub use transport::middleware::RetryConfig;
-pub use types::*;
+pub use client::Builder;
+pub use error::{DecodeError, Error, HttpError, Result};
+/// HTTP methods, headers, and status codes used by custom requests.
+pub use http;
+pub use multipart::Multipart;
+pub use request::Request;
+/// Native HTTP policies, TLS settings, and extension points.
+pub use reqx;
+
+/// Jenkins core version used to audit and integration-test this release.
+pub const SUPPORTED_JENKINS_LTS: &str = "2.580.1";
 
 #[cfg(feature = "blocking")]
 pub use client::{BlockingClient, BlockingClientBuilder};

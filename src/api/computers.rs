@@ -1,304 +1,211 @@
-use crate::transport::request::{Request, RequestBody};
-use crate::{ComputerInfo, ComputerList, ComputerName, Error, ExecutorsInfo};
-use http::HeaderValue;
+//! Jenkins computers: request constructors and response types.
 
-/// Jenkins computers/nodes (core) APIs.
-#[derive(Clone)]
-#[cfg(feature = "async")]
-pub struct ComputersService {
-    client: crate::Client,
+use super::path;
+use crate::{Request, Result, response};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::BTreeMap;
+
+/// Computers list payload (`GET /computer/api/json`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct ComputerList {
+    pub display_name: Option<String>,
+    pub busy_executors: Option<u32>,
+    pub total_executors: Option<u32>,
+    pub computer: Vec<ComputerInfo>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
-#[cfg(feature = "async")]
-impl ComputersService {
-    pub(crate) fn new(client: crate::Client) -> Self {
-        Self { client }
-    }
+/// Computer details payload (`GET /computer/<name>/api/json`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct ComputerInfo {
+    pub display_name: Option<String>,
+    pub offline: Option<bool>,
+    pub temporarily_offline: Option<bool>,
+    pub idle: Option<bool>,
+    pub num_executors: Option<u32>,
+    pub monitor_data: Option<Value>,
+    #[serde(rename = "_class")]
+    pub class_name: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
-#[cfg(feature = "async")]
-impl ComputersService {
-    /// `GET /computer/api/json`
-    pub async fn list(&self, tree: Option<&str>) -> Result<ComputerList, Error> {
-        let mut req = Request::get(["computer", "api", "json"]);
-        if let Some(tree) = tree {
-            req = req.query_pair("tree", tree);
-        }
-        self.client.send_json(req).await
-    }
+/// Executor counters from `GET /computer/api/json`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct ExecutorsInfo {
+    pub total_executors: u32,
+    pub busy_executors: u32,
+}
 
-    /// `POST /computer/doCreateItem?name=<name>` with XML body.
-    pub async fn create_from_xml(
-        &self,
-        name: impl Into<ComputerName>,
-        xml: impl Into<Vec<u8>>,
-    ) -> Result<(), Error> {
-        let name = name.into();
-        let req = Request::post(["computer", "doCreateItem"])
-            .query_pair("name", name.as_str())
-            .body(RequestBody::bytes_with_content_type(
-                xml.into(),
-                HeaderValue::from_static("application/xml"),
-            ));
-        self.client.send_unit(req).await
-    }
-
-    /// `POST /computer/doCreateItem?name=<to>&mode=copy&from=<from>`
-    pub async fn copy(
-        &self,
-        from: impl Into<ComputerName>,
-        to: impl Into<ComputerName>,
-    ) -> Result<(), Error> {
-        let from = from.into();
-        let to = to.into();
-        let req = Request::post(["computer", "doCreateItem"])
-            .query_pair("name", to.as_str())
-            .query_pair("mode", "copy")
-            .query_pair("from", from.as_str());
-        self.client.send_unit(req).await
-    }
-
-    /// `GET /computer/api/json` (typed subset).
-    pub async fn executors_info(&self) -> Result<ExecutorsInfo, Error> {
-        self.client
-            .send_json(Request::get(["computer", "api", "json"]))
-            .await
-    }
-
-    /// `GET /computer/<name>/api/json`
-    pub async fn computer(
-        &self,
-        name: impl Into<ComputerName>,
-        tree: Option<&str>,
-    ) -> Result<ComputerInfo, Error> {
-        let name = name.into();
-        let mut req = Request::get(["computer", name.as_str(), "api", "json"]);
-        if let Some(tree) = tree {
-            req = req.query_pair("tree", tree);
-        }
-        self.client.send_json(req).await
-    }
-
-    /// `POST /computer/<name>/toggleOffline`
-    pub async fn toggle_offline(
-        &self,
-        name: impl Into<ComputerName>,
-        offline_message: Option<&str>,
-    ) -> Result<(), Error> {
-        let name = name.into();
-        let mut req = Request::post(["computer", name.as_str(), "toggleOffline"]);
-        if let Some(message) = offline_message {
-            req = req.query_pair("offlineMessage", message);
-        }
-        self.client.send_unit(req).await
-    }
-
-    /// `POST /computer/<name>/doDelete`
-    pub async fn delete(&self, name: impl Into<ComputerName>) -> Result<(), Error> {
-        let name = name.into();
-        self.client
-            .send_unit(Request::post(["computer", name.as_str(), "doDelete"]))
-            .await
-    }
-
-    /// `GET /computer/<name>/config.xml`
-    pub async fn get_config_xml(&self, name: impl Into<ComputerName>) -> Result<Vec<u8>, Error> {
-        let name = name.into();
-        self.client
-            .send_bytes(Request::get(["computer", name.as_str(), "config.xml"]))
-            .await
-    }
-
-    /// `POST /computer/<name>/config.xml` with XML body.
-    pub async fn update_config_xml(
-        &self,
-        name: impl Into<ComputerName>,
-        xml: impl Into<Vec<u8>>,
-    ) -> Result<(), Error> {
-        let name = name.into();
-        self.client
-            .send_unit(
-                Request::post(["computer", name.as_str(), "config.xml"]).body(
-                    RequestBody::bytes_with_content_type(
-                        xml.into(),
-                        HeaderValue::from_static("application/xml"),
-                    ),
-                ),
-            )
-            .await
-    }
-
-    /// `POST /computer/<name>/connect`
-    pub async fn connect(&self, name: impl Into<ComputerName>) -> Result<(), Error> {
-        let name = name.into();
-        self.client
-            .send_unit(Request::post(["computer", name.as_str(), "connect"]))
-            .await
-    }
-
-    /// `POST /computer/<name>/disconnect`
-    pub async fn disconnect(&self, name: impl Into<ComputerName>) -> Result<(), Error> {
-        let name = name.into();
-        self.client
-            .send_unit(Request::post(["computer", name.as_str(), "disconnect"]))
-            .await
-    }
-
-    /// `POST /computer/<name>/launchSlaveAgent`
-    pub async fn launch_slave_agent(&self, name: impl Into<ComputerName>) -> Result<(), Error> {
-        let name = name.into();
-        self.client
-            .send_unit(Request::post([
-                "computer",
-                name.as_str(),
-                "launchSlaveAgent",
-            ]))
-            .await
+impl ExecutorsInfo {
+    /// Returns None if the server's snapshot reports more busy than total executors.
+    pub fn idle_executors(&self) -> Option<u32> {
+        self.total_executors.checked_sub(self.busy_executors)
     }
 }
 
-/// Jenkins computers/nodes (core) APIs (blocking).
-#[cfg(feature = "blocking")]
-#[derive(Clone)]
-pub struct BlockingComputersService {
-    client: crate::BlockingClient,
+/// `GET /computer/api/json`
+pub fn list() -> Request<ComputerList> {
+    Request::get(["computer", "api", "json"], response::json)
 }
 
-#[cfg(feature = "blocking")]
-impl BlockingComputersService {
-    pub(crate) fn new(client: crate::BlockingClient) -> Self {
-        Self { client }
-    }
+/// `POST /computer/createItem?name=<name>` with XML body.
+pub fn create_from_xml(name: &str, xml: impl Into<Vec<u8>>) -> Result<Request<()>> {
+    path::validate_segment(name)?;
+
+    Ok(Request::post(["computer", "createItem"], response::empty)
+        .query("name", name)
+        .xml(xml))
 }
 
-#[cfg(feature = "blocking")]
-impl BlockingComputersService {
-    /// `GET /computer/api/json`
-    pub fn list(&self, tree: Option<&str>) -> Result<ComputerList, Error> {
-        let mut req = Request::get(["computer", "api", "json"]);
-        if let Some(tree) = tree {
-            req = req.query_pair("tree", tree);
-        }
-        self.client.send_json(req)
-    }
+/// `POST /computer/createItem?name=<to>&mode=copy&from=<from>`
+pub fn copy(from: &str, to: &str) -> Result<Request<()>> {
+    path::validate_segment(from)?;
+    path::validate_segment(to)?;
 
-    /// `POST /computer/doCreateItem?name=<name>` with XML body.
-    pub fn create_from_xml(
-        &self,
-        name: impl Into<ComputerName>,
-        xml: impl Into<Vec<u8>>,
-    ) -> Result<(), Error> {
-        let name = name.into();
-        let req = Request::post(["computer", "doCreateItem"])
-            .query_pair("name", name.as_str())
-            .body(RequestBody::bytes_with_content_type(
-                xml.into(),
-                HeaderValue::from_static("application/xml"),
-            ));
-        self.client.send_unit(req)
-    }
+    Ok(Request::post(["computer", "createItem"], response::empty)
+        .query("name", to)
+        .query("mode", "copy")
+        .query("from", from))
+}
 
-    /// `POST /computer/doCreateItem?name=<to>&mode=copy&from=<from>`
-    pub fn copy(
-        &self,
-        from: impl Into<ComputerName>,
-        to: impl Into<ComputerName>,
-    ) -> Result<(), Error> {
-        let from = from.into();
-        let to = to.into();
-        let req = Request::post(["computer", "doCreateItem"])
-            .query_pair("name", to.as_str())
-            .query_pair("mode", "copy")
-            .query_pair("from", from.as_str());
-        self.client.send_unit(req)
-    }
+/// `GET /computer/api/json` (typed subset).
+pub fn executors_info() -> Request<ExecutorsInfo> {
+    Request::get(["computer", "api", "json"], response::json)
+}
 
-    /// `GET /computer/api/json` (typed subset).
-    pub fn executors_info(&self) -> Result<ExecutorsInfo, Error> {
-        self.client
-            .send_json(Request::get(["computer", "api", "json"]))
-    }
+/// `GET /computer/<name>/api/json`
+pub fn get(name: &str) -> Result<Request<ComputerInfo>> {
+    path::validate_segment(name)?;
 
-    /// `GET /computer/<name>/api/json`
-    pub fn computer(
-        &self,
-        name: impl Into<ComputerName>,
-        tree: Option<&str>,
-    ) -> Result<ComputerInfo, Error> {
-        let name = name.into();
-        let mut req = Request::get(["computer", name.as_str(), "api", "json"]);
-        if let Some(tree) = tree {
-            req = req.query_pair("tree", tree);
-        }
-        self.client.send_json(req)
-    }
+    Ok(Request::get(
+        ["computer", name, "api", "json"],
+        response::json,
+    ))
+}
 
-    /// `POST /computer/<name>/toggleOffline`
-    pub fn toggle_offline(
-        &self,
-        name: impl Into<ComputerName>,
-        offline_message: Option<&str>,
-    ) -> Result<(), Error> {
-        let name = name.into();
-        let mut req = Request::post(["computer", name.as_str(), "toggleOffline"]);
-        if let Some(message) = offline_message {
-            req = req.query_pair("offlineMessage", message);
-        }
-        self.client.send_unit(req)
-    }
+/// `POST /computer/<name>/toggleOffline`
+pub fn toggle_offline(name: &str, offline_message: Option<&str>) -> Result<Request<()>> {
+    path::validate_segment(name)?;
 
-    /// `POST /computer/<name>/doDelete`
-    pub fn delete(&self, name: impl Into<ComputerName>) -> Result<(), Error> {
-        let name = name.into();
-        self.client
-            .send_unit(Request::post(["computer", name.as_str(), "doDelete"]))
+    let mut req = Request::post(["computer", name, "toggleOffline"], response::empty);
+    if let Some(message) = offline_message {
+        req = req.query("offlineMessage", message);
     }
+    Ok(req)
+}
 
-    /// `GET /computer/<name>/config.xml`
-    pub fn get_config_xml(&self, name: impl Into<ComputerName>) -> Result<Vec<u8>, Error> {
-        let name = name.into();
-        self.client
-            .send_bytes(Request::get(["computer", name.as_str(), "config.xml"]))
-    }
+/// `POST /computer/<name>/doDelete`
+pub fn delete(name: &str) -> Result<Request<()>> {
+    path::validate_segment(name)?;
 
-    /// `POST /computer/<name>/config.xml` with XML body.
-    pub fn update_config_xml(
-        &self,
-        name: impl Into<ComputerName>,
-        xml: impl Into<Vec<u8>>,
-    ) -> Result<(), Error> {
-        let name = name.into();
-        self.client.send_unit(
-            Request::post(["computer", name.as_str(), "config.xml"]).body(
-                RequestBody::bytes_with_content_type(
-                    xml.into(),
-                    HeaderValue::from_static("application/xml"),
-                ),
-            ),
-        )
-    }
+    Ok(Request::post(
+        ["computer", name, "doDelete"],
+        response::empty,
+    ))
+}
 
-    /// `POST /computer/<name>/connect`
-    pub fn connect(&self, name: impl Into<ComputerName>) -> Result<(), Error> {
-        let name = name.into();
-        self.client
-            .send_unit(Request::post(["computer", name.as_str(), "connect"]))
-    }
+/// `GET /computer/<name>/config.xml`
+pub fn get_config_xml(name: &str) -> Result<Request<Vec<u8>>> {
+    path::validate_segment(name)?;
 
-    /// `POST /computer/<name>/disconnect`
-    pub fn disconnect(&self, name: impl Into<ComputerName>) -> Result<(), Error> {
-        let name = name.into();
-        self.client
-            .send_unit(Request::post(["computer", name.as_str(), "disconnect"]))
-    }
+    Ok(Request::get(
+        ["computer", name, "config.xml"],
+        response::bytes,
+    ))
+}
 
-    /// `POST /computer/<name>/launchSlaveAgent`
-    pub fn launch_slave_agent(&self, name: impl Into<ComputerName>) -> Result<(), Error> {
-        let name = name.into();
-        self.client.send_unit(Request::post([
-            "computer",
-            name.as_str(),
-            "launchSlaveAgent",
-        ]))
-    }
+/// `POST /computer/<name>/config.xml` with XML body.
+pub fn update_config_xml(name: &str, xml: impl Into<Vec<u8>>) -> Result<Request<()>> {
+    path::validate_segment(name)?;
+
+    Ok(Request::post(["computer", name, "config.xml"], response::empty).xml(xml))
+}
+
+/// `POST /computer/<name>/doDisconnect`
+pub fn disconnect(name: &str) -> Result<Request<()>> {
+    path::validate_segment(name)?;
+
+    Ok(Request::post(
+        ["computer", name, "doDisconnect"],
+        response::empty,
+    ))
+}
+
+/// `POST /computer/<name>/launchSlaveAgent`
+pub fn launch_slave_agent(name: &str) -> Result<Request<()>> {
+    path::validate_segment(name)?;
+
+    Ok(Request::post(
+        ["computer", name, "launchSlaveAgent"],
+        response::empty,
+    ))
+}
+
+/// Change the reason associated with a temporarily offline node.
+pub fn change_offline_cause(name: &str, message: impl Into<String>) -> Result<Request<()>> {
+    path::validate_segment(name)?;
+    Ok(
+        Request::post(["computer", name, "changeOfflineCause"], response::empty)
+            .form_pairs([("offlineMessage", message)]),
+    )
+}
+
+/// Update an agent's description.
+pub fn set_description(name: &str, description: impl Into<String>) -> Result<Request<()>> {
+    path::validate_segment(name)?;
+    Ok(
+        Request::post(["computer", name, "submitDescription"], response::empty)
+            .form_pairs([("description", description)]),
+    )
+}
+
+/// Execute Groovy on an online agent and return its output.
+pub fn script(name: &str, script: impl Into<String>) -> Result<Request<String>> {
+    path::validate_segment(name)?;
+    Ok(
+        Request::post(["computer", name, "scriptText"], response::text)
+            .form_pairs([("script", script)]),
+    )
+}
+
+/// Read the agent connection log starting at a byte offset.
+pub fn progressive_log(name: &str, start: u64) -> Result<Request<super::builds::ProgressiveText>> {
+    path::validate_segment(name)?;
+    Ok(Request::get(
+        ["computer", name, "logText", "progressiveText"],
+        super::builds::decode_progressive_text,
+    )
+    .query("start", start.to_string()))
+}
+
+/// Refresh disk, response-time, and other node monitors.
+pub fn update_monitors() -> Request<()> {
+    Request::post(["computer", "updateNow"], response::empty)
+}
+
+/// Download an inbound agent's JNLP launch descriptor.
+pub fn agent_jnlp(name: &str) -> Result<Request<Vec<u8>>> {
+    path::validate_segment(name)?;
+    Ok(Request::get(
+        ["computer", name, "jenkins-agent.jnlp"],
+        response::bytes,
+    ))
+}
+
+/// Dump the remoting export table for diagnostics.
+pub fn export_table(name: &str) -> Result<Request<String>> {
+    path::validate_segment(name)?;
+    Ok(Request::get(
+        ["computer", name, "dumpExportTable"],
+        response::text,
+    ))
 }

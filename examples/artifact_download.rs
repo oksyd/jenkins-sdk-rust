@@ -1,59 +1,26 @@
-//! Async artifact download example.
-//!
-//! ```bash
-//! cargo run --example artifact_download
-//! ```
-//!
-//! Env vars:
-//! - `JENKINS_URL`
-//! - `JENKINS_USER`, `JENKINS_TOKEN` (optional)
-//! - `JENKINS_JOB` (default: `core`)
-//! - `JENKINS_BUILD` (default: `lastSuccessfulBuild`)
-//! - `JENKINS_ARTIFACT` (required, e.g. `target/app.tar.gz` or `a/b c.txt`)
-//! - `OUTPUT_PATH` (optional, write the downloaded bytes to this path)
-
-use jenkins_sdk::Client;
-use std::{path::PathBuf, time::Duration};
+//! Download an artifact from the last successful build. Set JENKINS_URL,
+//! JENKINS_USER, JENKINS_TOKEN, JENKINS_JOB, JENKINS_ARTIFACT and OUTPUT_PATH.
+use jenkins_sdk::{Auth, Client, api::builds};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let base_url = env_or("JENKINS_URL", "https://jenkins.example.com");
-    let job = env_or("JENKINS_JOB", "core");
-    let build = env_or("JENKINS_BUILD", "lastSuccessfulBuild");
-
-    let Some(artifact) = env_opt("JENKINS_ARTIFACT") else {
-        eprintln!("missing JENKINS_ARTIFACT (example: target/app.tar.gz)");
-        return Ok(());
-    };
-
-    let mut builder = Client::builder(&base_url)?.timeout(Duration::from_secs(60));
-
-    if let (Some(user), Some(token)) = (env_opt("JENKINS_USER"), env_opt("JENKINS_TOKEN")) {
-        builder = builder.auth_basic(user, token);
-    }
-
-    let client = builder.build()?;
-
+    let client = Client::builder(std::env::var("JENKINS_URL")?)?
+        .auth(Auth::basic(
+            std::env::var("JENKINS_USER")?,
+            std::env::var("JENKINS_TOKEN")?,
+        ))
+        .configure_http(|http| http.max_response_body_bytes(64 * 1024 * 1024))
+        .build()?;
+    let job = std::env::var("JENKINS_JOB")?;
+    let artifact = std::env::var("JENKINS_ARTIFACT")?;
     let bytes = client
-        .jobs()
-        .download_artifact(job.as_str(), build.as_str(), artifact)
+        .execute(builds::download_artifact(
+            &job,
+            builds::BuildSelector::LastSuccessful,
+            &artifact,
+        )?)
         .await?;
-
-    if let Some(output) = env_opt("OUTPUT_PATH") {
-        let path = PathBuf::from(output);
-        std::fs::write(&path, &bytes)?;
-        println!("wrote {} bytes to {}", bytes.len(), path.display());
-    } else {
-        println!("downloaded {} bytes", bytes.len());
-    }
-
+    tokio::fs::write(std::env::var("OUTPUT_PATH")?, &bytes).await?;
+    println!("downloaded {} bytes", bytes.len());
     Ok(())
-}
-
-fn env_or(name: &str, default: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| default.to_owned())
-}
-
-fn env_opt(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
 }

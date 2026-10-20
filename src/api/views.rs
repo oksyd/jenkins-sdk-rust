@@ -1,243 +1,125 @@
-use crate::transport::request::{Request, RequestBody};
-use crate::{Error, JobPath, ViewInfo, ViewList, ViewName};
-use http::HeaderValue;
+//! Jenkins views: request constructors and response types.
 
-/// Jenkins views (core) APIs.
-#[derive(Clone)]
-#[cfg(feature = "async")]
-pub struct ViewsService {
-    client: crate::Client,
+use super::{jobs::JobSummary, path};
+use crate::{Request, Result, response};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::BTreeMap;
+
+/// One view summary entry.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct ViewSummary {
+    pub name: String,
+    pub url: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
-#[cfg(feature = "async")]
-impl ViewsService {
-    pub(crate) fn new(client: crate::Client) -> Self {
-        Self { client }
-    }
+/// View list payload (for example `GET /api/json?tree=views[name,url]`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ViewList {
+    pub views: Vec<ViewSummary>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
-#[cfg(feature = "async")]
-impl ViewsService {
-    /// `GET /api/json?tree=views[name,url]`
-    pub async fn list(&self) -> Result<ViewList, Error> {
-        self.client
-            .send_json(Request::get(["api", "json"]).query_pair("tree", "views[name,url]"))
-            .await
-    }
-
-    /// `GET /view/<name>/api/json`
-    pub async fn get(
-        &self,
-        name: impl Into<ViewName>,
-        tree: Option<&str>,
-    ) -> Result<ViewInfo, Error> {
-        let name = name.into();
-        let mut req = Request::get(["view", name.as_str(), "api", "json"]);
-        if let Some(tree) = tree {
-            req = req.query_pair("tree", tree);
-        }
-        self.client.send_json(req).await
-    }
-
-    /// `POST /createView?name=<name>` with XML body.
-    pub async fn create_from_xml(
-        &self,
-        name: impl Into<ViewName>,
-        xml: impl Into<Vec<u8>>,
-    ) -> Result<(), Error> {
-        let name = name.into();
-        let req = Request::post(["createView"])
-            .query_pair("name", name.as_str())
-            .body(RequestBody::bytes_with_content_type(
-                xml.into(),
-                HeaderValue::from_static("application/xml"),
-            ));
-        self.client.send_unit(req).await
-    }
-
-    /// `POST /view/<name>/doDelete`
-    pub async fn delete(&self, name: impl Into<ViewName>) -> Result<(), Error> {
-        let name = name.into();
-        self.client
-            .send_unit(Request::post(["view", name.as_str(), "doDelete"]))
-            .await
-    }
-
-    /// `POST /view/<name>/doRename?newName=<new_name>`
-    pub async fn rename(
-        &self,
-        name: impl Into<ViewName>,
-        new_name: impl Into<ViewName>,
-    ) -> Result<(), Error> {
-        let name = name.into();
-        let new_name = new_name.into();
-        let req = Request::post(["view", name.as_str(), "doRename"])
-            .query_pair("newName", new_name.as_str());
-        self.client.send_unit(req).await
-    }
-
-    /// `POST /view/<view>/addJobToView?name=<job>`
-    pub async fn add_job(
-        &self,
-        view: impl Into<ViewName>,
-        job: impl Into<JobPath>,
-    ) -> Result<(), Error> {
-        let view = view.into();
-        let job = job.into();
-        let req =
-            Request::post(["view", view.as_str(), "addJobToView"]).query_pair("name", job.as_str());
-        self.client.send_unit(req).await
-    }
-
-    /// `POST /view/<view>/removeJobFromView?name=<job>`
-    pub async fn remove_job(
-        &self,
-        view: impl Into<ViewName>,
-        job: impl Into<JobPath>,
-    ) -> Result<(), Error> {
-        let view = view.into();
-        let job = job.into();
-        let req = Request::post(["view", view.as_str(), "removeJobFromView"])
-            .query_pair("name", job.as_str());
-        self.client.send_unit(req).await
-    }
-
-    /// `GET /view/<name>/config.xml`
-    pub async fn get_config_xml(&self, name: impl Into<ViewName>) -> Result<Vec<u8>, Error> {
-        let name = name.into();
-        self.client
-            .send_bytes(Request::get(["view", name.as_str(), "config.xml"]))
-            .await
-    }
-
-    /// `POST /view/<name>/config.xml` with XML body.
-    pub async fn update_config_xml(
-        &self,
-        name: impl Into<ViewName>,
-        xml: impl Into<Vec<u8>>,
-    ) -> Result<(), Error> {
-        let name = name.into();
-        self.client
-            .send_unit(Request::post(["view", name.as_str(), "config.xml"]).body(
-                RequestBody::bytes_with_content_type(
-                    xml.into(),
-                    HeaderValue::from_static("application/xml"),
-                ),
-            ))
-            .await
-    }
+/// View details payload (`GET /view/<name>/api/json`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct ViewInfo {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub url: Option<String>,
+    pub property: Option<Vec<Value>>,
+    pub jobs: Option<Vec<JobSummary>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
-/// Jenkins views (core) APIs (blocking).
-#[cfg(feature = "blocking")]
-#[derive(Clone)]
-pub struct BlockingViewsService {
-    client: crate::BlockingClient,
+/// `GET /api/json?tree=views[name,url]`
+pub fn list() -> Request<ViewList> {
+    Request::get(["api", "json"], response::json).query("tree", "views[name,url]")
 }
 
-#[cfg(feature = "blocking")]
-impl BlockingViewsService {
-    pub(crate) fn new(client: crate::BlockingClient) -> Self {
-        Self { client }
-    }
+/// Update a view's description.
+pub fn set_description(name: &str, description: impl Into<String>) -> Result<Request<()>> {
+    path::validate_segment(name)?;
+    Ok(
+        Request::post(["view", name, "submitDescription"], response::empty)
+            .form_pairs([("description", description)]),
+    )
 }
 
-#[cfg(feature = "blocking")]
-impl BlockingViewsService {
-    /// `GET /api/json?tree=views[name,url]`
-    pub fn list(&self) -> Result<ViewList, Error> {
-        self.client
-            .send_json(Request::get(["api", "json"]).query_pair("tree", "views[name,url]"))
-    }
+/// Submit a complete view configuration. Renaming uses the `name` field.
+/// XML updates preserve the current name; renaming requires this form action.
+pub fn configure(name: &str, form: &Value) -> Result<Request<()>> {
+    path::validate_segment(name)?;
+    let new_name = form
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or(crate::Error::InvalidInput {
+            field: "view configuration",
+            message: "requires a string name field",
+        })?;
+    path::validate_segment(new_name)?;
+    Request::post(["view", name, "configSubmit"], response::empty)
+        .query("name", new_name)
+        .submitted_form(form)
+}
 
-    /// `GET /view/<name>/api/json`
-    pub fn get(&self, name: impl Into<ViewName>, tree: Option<&str>) -> Result<ViewInfo, Error> {
-        let name = name.into();
-        let mut req = Request::get(["view", name.as_str(), "api", "json"]);
-        if let Some(tree) = tree {
-            req = req.query_pair("tree", tree);
-        }
-        self.client.send_json(req)
-    }
+/// `GET /view/<name>/api/json`
+pub fn get(name: &str) -> Result<Request<ViewInfo>> {
+    path::validate_segment(name)?;
 
-    /// `POST /createView?name=<name>` with XML body.
-    pub fn create_from_xml(
-        &self,
-        name: impl Into<ViewName>,
-        xml: impl Into<Vec<u8>>,
-    ) -> Result<(), Error> {
-        let name = name.into();
-        let req = Request::post(["createView"])
-            .query_pair("name", name.as_str())
-            .body(RequestBody::bytes_with_content_type(
-                xml.into(),
-                HeaderValue::from_static("application/xml"),
-            ));
-        self.client.send_unit(req)
-    }
+    Ok(Request::get(["view", name, "api", "json"], response::json))
+}
 
-    /// `POST /view/<name>/doDelete`
-    pub fn delete(&self, name: impl Into<ViewName>) -> Result<(), Error> {
-        let name = name.into();
-        self.client
-            .send_unit(Request::post(["view", name.as_str(), "doDelete"]))
-    }
+/// `POST /createView?name=<name>` with XML body.
+pub fn create_from_xml(name: &str, xml: impl Into<Vec<u8>>) -> Result<Request<()>> {
+    path::validate_segment(name)?;
 
-    /// `POST /view/<name>/doRename?newName=<new_name>`
-    pub fn rename(
-        &self,
-        name: impl Into<ViewName>,
-        new_name: impl Into<ViewName>,
-    ) -> Result<(), Error> {
-        let name = name.into();
-        let new_name = new_name.into();
-        let req = Request::post(["view", name.as_str(), "doRename"])
-            .query_pair("newName", new_name.as_str());
-        self.client.send_unit(req)
-    }
+    Ok(Request::post(["createView"], response::empty)
+        .query("name", name)
+        .xml(xml))
+}
 
-    /// `POST /view/<view>/addJobToView?name=<job>`
-    pub fn add_job(&self, view: impl Into<ViewName>, job: impl Into<JobPath>) -> Result<(), Error> {
-        let view = view.into();
-        let job = job.into();
-        let req =
-            Request::post(["view", view.as_str(), "addJobToView"]).query_pair("name", job.as_str());
-        self.client.send_unit(req)
-    }
+/// `POST /view/<name>/doDelete`
+pub fn delete(name: &str) -> Result<Request<()>> {
+    path::validate_segment(name)?;
 
-    /// `POST /view/<view>/removeJobFromView?name=<job>`
-    pub fn remove_job(
-        &self,
-        view: impl Into<ViewName>,
-        job: impl Into<JobPath>,
-    ) -> Result<(), Error> {
-        let view = view.into();
-        let job = job.into();
-        let req = Request::post(["view", view.as_str(), "removeJobFromView"])
-            .query_pair("name", job.as_str());
-        self.client.send_unit(req)
-    }
+    Ok(Request::post(["view", name, "doDelete"], response::empty))
+}
 
-    /// `GET /view/<name>/config.xml`
-    pub fn get_config_xml(&self, name: impl Into<ViewName>) -> Result<Vec<u8>, Error> {
-        let name = name.into();
-        self.client
-            .send_bytes(Request::get(["view", name.as_str(), "config.xml"]))
-    }
+/// `POST /view/<view>/addJobToView?name=<job>`
+pub fn add_job(view: &str, job: &str) -> Result<Request<()>> {
+    path::validate_segment(view)?;
+    path::segments(job)?;
 
-    /// `POST /view/<name>/config.xml` with XML body.
-    pub fn update_config_xml(
-        &self,
-        name: impl Into<ViewName>,
-        xml: impl Into<Vec<u8>>,
-    ) -> Result<(), Error> {
-        let name = name.into();
-        self.client
-            .send_unit(Request::post(["view", name.as_str(), "config.xml"]).body(
-                RequestBody::bytes_with_content_type(
-                    xml.into(),
-                    HeaderValue::from_static("application/xml"),
-                ),
-            ))
-    }
+    Ok(Request::post(["view", view, "addJobToView"], response::empty).query("name", job))
+}
+
+/// `POST /view/<view>/removeJobFromView?name=<job>`
+pub fn remove_job(view: &str, job: &str) -> Result<Request<()>> {
+    path::validate_segment(view)?;
+    path::segments(job)?;
+
+    Ok(Request::post(["view", view, "removeJobFromView"], response::empty).query("name", job))
+}
+
+/// `GET /view/<name>/config.xml`
+pub fn get_config_xml(name: &str) -> Result<Request<Vec<u8>>> {
+    path::validate_segment(name)?;
+
+    Ok(Request::get(["view", name, "config.xml"], response::bytes))
+}
+
+/// `POST /view/<name>/config.xml` with XML body.
+pub fn update_config_xml(name: &str, xml: impl Into<Vec<u8>>) -> Result<Request<()>> {
+    path::validate_segment(name)?;
+
+    Ok(Request::post(["view", name, "config.xml"], response::empty).xml(xml))
 }

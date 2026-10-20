@@ -1,20 +1,20 @@
 [package]
 name = "jenkins-sdk"
-description = "Jenkins API SDK in pure Rust with async and blocking clients, typed endpoints, pluggable middleware, and zero magic strings."
+description = "Jenkins API SDK in pure Rust with async and blocking clients, typed endpoints, and reqx transport controls."
 version = "0.1.16"
 edition = "2024"
-rust-version = "1.93.0"
+rust-version = "1.99.1"
 autoexamples = false
-license = "MIT"
+license = "Apache-2.0"
 authors = ["lvillis<lvillis@outlook.com>"]
 repository = "https://github.com/lvillis/jenkins-sdk-rust"
 homepage = "https://github.com/lvillis/jenkins-sdk-rust"
-documentation = "https://github.com/lvillis/jenkins-sdk-rust#readme"
+documentation = "https://docs.rs/jenkins-sdk"
 include = [
   "Cargo.toml",
   "CHANGELOG.md",
+  "LICENSE",
   "README.md",
-  "README.zh-CN.md",
   "src/**",
   "examples/**",
   "tests/**",
@@ -24,7 +24,7 @@ include = [
 default = ["async-rustls-ring"]
 
 # Core modes (building blocks)
-async = ["dep:reqx", "dep:tokio", "dep:async-trait"]
+async = ["dep:reqx", "dep:tokio"]
 blocking = ["dep:reqx"]
 
 # Async matrix (choose exactly one async TLS backend when `async` is enabled)
@@ -37,41 +37,40 @@ blocking-rustls-ring = ["blocking", "reqx?/blocking-tls-rustls-ring"]
 blocking-rustls-aws-lc-rs = ["blocking", "reqx?/blocking-tls-rustls-aws-lc-rs"]
 blocking-native-tls = ["blocking", "reqx?/blocking-tls-native"]
 
-tracing = ["dep:tracing"]
-metrics = ["dep:metrics"]
+compression-gzip = ["reqx?/compression-gzip"]
+compression-brotli = ["reqx?/compression-brotli"]
+compression-zstd = ["reqx?/compression-zstd"]
 
 [dependencies]
 base64 = { version = "0.22.1", default-features = false, features = ["std"] }
+cookie_store = { version = "0.22.1", default-features = false }
 http = { version = "1.4.0", default-features = false, features = ["std"] }
 httpdate = { version = "1.0.3", default-features = false }
 serde = { version = "1.0.228", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "1.0.149", default-features = false, features = ["std"] }
 thiserror = { version = "2.0.17", default-features = false, features = ["std"] }
-tracing = { version = "0.1.44", default-features = false, features = ["std"], optional = true }
 url = { version = "2.5.8", default-features = false, features = ["std"] }
-metrics = { version = "0.24.3", default-features = false, optional = true }
 
 # async-only deps
-async-trait = { version = "0.1.89", default-features = false, optional = true }
-tokio = { version = "1.49.0", default-features = false, features = ["sync", "time"], optional = true }
+tokio = { version = "1.49.0", default-features = false, features = ["sync"], optional = true }
 
 # HTTP stack
-reqx = { version = "0.1.22", default-features = false, optional = true }
+reqx = { version = "0.2.11", default-features = false, optional = true }
 
 [dev-dependencies]
 anyhow = { version = "1.0.100", default-features = false, features = ["std"] }
-tokio = { version = "1.49.0", default-features = false, features = ["macros", "rt", "rt-multi-thread", "time"] }
+tokio = { version = "1.49.0", default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "fs"] }
 wiremock = { version = "0.6.5", default-features = false }
 
 [[example]]
-name = "async_test"
-path = "examples/async_test.rs"
+name = "async_client"
+path = "examples/async_client.rs"
 required-features = ["async"]
 
 [[example]]
-name = "whoami"
-path = "examples/whoami.rs"
-required-features = ["async"]
+name = "blocking_client"
+path = "examples/blocking_client.rs"
+required-features = ["blocking"]
 
 [[example]]
 name = "progressive_log"
@@ -84,24 +83,22 @@ path = "examples/artifact_download.rs"
 required-features = ["async"]
 
 [[example]]
-name = "request_hook"
-path = "examples/request_hook.rs"
+name = "interceptor"
+path = "examples/interceptor.rs"
 required-features = ["async"]
 
 [[example]]
-name = "retry_error_handling"
-path = "examples/retry_error_handling.rs"
+name = "errors_and_retries"
+path = "examples/errors_and_retries.rs"
 required-features = ["async"]
 
 [[example]]
-name = "tls_root_store"
-path = "examples/tls_root_store.rs"
+name = "custom_ca"
+path = "examples/custom_ca.rs"
 required-features = ["async"]
 
-[[example]]
-name = "blocking_test"
-path = "examples/blocking_test.rs"
-required-features = ["blocking"]
+[package.metadata.docs.rs]
+features = ["blocking-rustls-ring"]
 
 [package.metadata.release]
 tag-prefix = ""

@@ -1,60 +1,29 @@
-//! Async progressive console log example.
-//!
-//! ```bash
-//! cargo run --example progressive_log
-//! ```
-//!
-//! Env vars:
-//! - `JENKINS_URL`
-//! - `JENKINS_USER`, `JENKINS_TOKEN` (optional)
-//! - `JENKINS_JOB` (default: `core`)
-//! - `JENKINS_BUILD` (default: `lastBuild`)
-
-use jenkins_sdk::Client;
+//! Follow a running build. Set JENKINS_URL, JENKINS_USER, JENKINS_TOKEN,
+//! JENKINS_JOB and JENKINS_BUILD (a number or Jenkins build selector).
+use jenkins_sdk::{Auth, Client, api::builds};
 use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let base_url = env_or("JENKINS_URL", "https://jenkins.example.com");
-    let job = env_or("JENKINS_JOB", "core");
-    let build = env_or("JENKINS_BUILD", "lastBuild");
-
-    let mut builder = Client::builder(&base_url)?.timeout(Duration::from_secs(30));
-
-    if let (Some(user), Some(token)) = (env_opt("JENKINS_USER"), env_opt("JENKINS_TOKEN")) {
-        builder = builder.auth_basic(user, token);
-    }
-
-    let client = builder.build()?;
-
-    let mut start = 0u64;
-    for _ in 0..10 {
+    let client = Client::builder(std::env::var("JENKINS_URL")?)?
+        .auth(Auth::basic(
+            std::env::var("JENKINS_USER")?,
+            std::env::var("JENKINS_TOKEN")?,
+        ))
+        .build()?;
+    let job = std::env::var("JENKINS_JOB")?;
+    let build = std::env::var("JENKINS_BUILD")?.parse()?;
+    let mut start = 0;
+    loop {
         let chunk = client
-            .jobs()
-            .progressive_console_text(job.as_str(), build.as_str(), start)
+            .execute(builds::progressive_console_text(&job, build, start)?)
             .await?;
-
-        if !chunk.text.is_empty() {
-            print!("{}", chunk.text);
-        }
-
+        print!("{}", chunk.text);
         if !chunk.more_data {
             break;
         }
-
-        start = match chunk.next_start {
-            Some(next) => next,
-            None => break,
-        };
+        start = chunk.next_start;
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
-
     Ok(())
-}
-
-fn env_or(name: &str, default: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| default.to_owned())
-}
-
-fn env_opt(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
 }
