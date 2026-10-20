@@ -1,3 +1,16 @@
+## [0.1.17] - 2026-10-20
+
+### 🚀 Features
+
+- Support Jenkins 2.580.1 LTS
+
+### 🚜 Refactor
+
+- [**breaking**] Migrate to reqx
+
+### ⚙️ Miscellaneous Tasks
+
+- Polish ci and tests
 ## [0.1.16] - 2026-01-13
 
 ### 🐛 Bug Fixes
@@ -12,6 +25,7 @@
 
 - *(docs)* Update README.md
 - Update Cargo.toml
+- Release jenkins-sdk version 0.1.16
 ## [0.1.15] - 2025-12-29
 
 ### 🚜 Refactor
@@ -26,12 +40,8 @@
 
 ### ⚙️ Miscellaneous Tasks
 
-- Release jenkins-sdk version 0.1.14
-## [0.1.13] - 2025-12-09
-
-### ⚙️ Miscellaneous Tasks
-
 - Release jenkins-sdk version 0.1.13
+- Release jenkins-sdk version 0.1.14
 ## [0.1.12] - 2025-12-09
 
 ### 🐛 Bug Fixes
@@ -48,14 +58,14 @@
 - Align middleware exports and crumb timeouts
 - *(retry)* Correct exponential backoff timings
 
+### 📚 Documentation
+
+- Update usage samples for fallible builder chain
+
 ### 🚜 Refactor
 
 - *(endpoint)* Add parsing hook and robust param encoding
 - *(client)* Make builders fallible and delegate decoding to endpoints
-
-### 📚 Documentation
-
-- Update usage samples for fallible builder chain
 
 ### 🧪 Testing
 
